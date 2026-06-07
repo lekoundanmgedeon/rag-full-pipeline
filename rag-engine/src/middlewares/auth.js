@@ -9,7 +9,7 @@ export const authenticate = (req, res, next) => {
     return res.status(401).json({ error: 'Token manquant' });
   }
   try {
-    const decoded = jwt.verify(header.split(' ')[1], JWT_SECRET);
+    const decoded = jwt.verify(header.split(' ')[1], JWT_SECRET)
     req.user = {
       id:       decoded.sub,
       tenantId: decoded.tenantId || '00000000-0000-0000-0000-000000000001',

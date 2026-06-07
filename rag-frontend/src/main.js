@@ -9,6 +9,7 @@ const router = createRouter({
   routes: [
     { path: '/',           component: ChatView },
     { path: '/c/:id',      component: ChatView },
+    { path: '/login', component: () => import('./views/DevLogin.vue') }
   ]
 })
 
