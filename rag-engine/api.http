@@ -1,0 +1,78 @@
+### ═══════════════════════════════════════════════════
+### Test de l'API Chat RAG — exemples curl & REST Client
+### ═══════════════════════════════════════════════════
+
+# 1. Générer un JWT de test (Node.js)
+# node -e "
+#   import('jsonwebtoken').then(({default:jwt})=>{
+#     console.log(jwt.sign({
+#       sub:'user-001', tenantId:'00000000-0000-0000-0000-000000000001',
+#       email:'test@example.com', roles:['admin']
+#     }, 'change-me', {expiresIn:'24h'}))
+#   })
+# "
+
+# ─────────────────────────────────────────────────────
+# 2. Health check
+# ─────────────────────────────────────────────────────
+GET http://localhost:3001/health
+
+
+# ─────────────────────────────────────────────────────
+# 3. Question simple (stream SSE)
+# ─────────────────────────────────────────────────────
+# Avec curl (affiche le stream brut) :
+#
+# curl -N -X POST http://localhost:3001/api/chat \
+#   -H "Content-Type: application/json" \
+#   -H "Authorization: Bearer <TOKEN>" \
+#   -d '{"question":"Quels sont les documents disponibles sur la procédure RH?"}'
+#
+# Réponse attendue (SSE) :
+# data: {"type":"meta","conversationId":"uuid","sources":[...]}
+# data: {"type":"token","content":"Voici"}
+# data: {"type":"token","content":" les"}
+# ...
+# data: {"type":"done","latencyMs":2340}
+
+
+# ─────────────────────────────────────────────────────
+# 4. Conversation multi-tours
+# ─────────────────────────────────────────────────────
+# Tour 1 — créer la conversation
+# curl -N -X POST http://localhost:3001/api/chat \
+#   -H "Authorization: Bearer <TOKEN>" \
+#   -H "Content-Type: application/json" \
+#   -d '{"question":"Quelle est la politique de congés?"}'
+# → Récupérer le conversationId depuis l'événement "meta"
+
+# Tour 2 — continuer la conversation (pronoms résolus automatiquement)
+# curl -N -X POST http://localhost:3001/api/chat \
+#   -H "Authorization: Bearer <TOKEN>" \
+#   -H "Content-Type: application/json" \
+#   -d '{"question":"Et pour les congés maladie, cest pareil?","conversationId":"<UUID>"}'
+
+
+# ─────────────────────────────────────────────────────
+# 5. Recherche documentaire directe (sans LLM)
+# ─────────────────────────────────────────────────────
+# curl -X POST http://localhost:3001/api/search \
+#   -H "Authorization: Bearer <TOKEN>" \
+#   -H "Content-Type: application/json" \
+#   -d '{"query":"procédure onboarding","topK":5,"mode":"hybrid"}'
+
+
+# ─────────────────────────────────────────────────────
+# 6. Lister les conversations
+# ─────────────────────────────────────────────────────
+# curl http://localhost:3001/api/conversations \
+#   -H "Authorization: Bearer <TOKEN>"
+
+
+# ─────────────────────────────────────────────────────
+# 7. Feedback positif sur un message
+# ─────────────────────────────────────────────────────
+# curl -X POST http://localhost:3001/api/messages/<MSG_UUID>/feedback \
+#   -H "Authorization: Bearer <TOKEN>" \
+#   -H "Content-Type: application/json" \
+#   -d '{"feedback":1}'   # 1=positif, -1=négatif

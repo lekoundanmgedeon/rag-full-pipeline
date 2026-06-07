@@ -1,0 +1,119 @@
+version: '3.9'
+
+# ── Stack RAG unifiée ─────────────────────────────────────────────────
+# rag-ingestion + rag-engine → rag-api (1 seul service)
+#
+# Usage dev :  docker compose up -d db redis ollama
+# Usage prod : docker compose up -d
+
+x-api-env: &api-env
+  DATABASE_URL:          postgresql://${DB_USER:-raguser}:${DB_PASSWORD:-ragpassword}@db:5432/${DB_NAME:-ragdb}
+  REDIS_URL:             redis://redis:6379
+  OLLAMA_BASE_URL:       http://ollama:11434
+  OLLAMA_EMBED_MODEL:    ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+  OLLAMA_LLM_MODEL:      ${OLLAMA_LLM_MODEL:-qwen3:8b}
+  JWT_SECRET:            ${JWT_SECRET:-change-me}
+  NODE_ENV:              production
+  LOG_LEVEL:             ${LOG_LEVEL:-info}
+
+services:
+
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${DB_NAME:-ragdb}
+      POSTGRES_USER:     ${DB_USER:-raguser}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-ragpassword}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    command: >
+      postgres
+        -c shared_buffers=1GB
+        -c work_mem=128MB
+        -c maintenance_work_mem=512MB
+        -c effective_cache_size=3GB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-raguser} -d ${DB_NAME:-ragdb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollamadata:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ── Service unifié (remplace ingestion + engine) ──────────────
+  api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      <<: *api-env
+      PORT:                 3000
+      UPLOAD_DIR:           /app/uploads
+      MAX_FILE_SIZE_MB:     ${MAX_FILE_SIZE_MB:-50}
+      CHUNK_MAX_TOKENS:     ${CHUNK_MAX_TOKENS:-512}
+      CHUNK_OVERLAP_TOKENS: ${CHUNK_OVERLAP_TOKENS:-80}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-20}
+      CANDIDATE_POOL:       ${CANDIDATE_POOL:-40}
+      CONTEXT_CHUNKS:       ${CONTEXT_CHUNKS:-6}
+      HISTORY_WINDOW:       ${HISTORY_WINDOW:-6}
+      FRONTEND_URL:         ${FRONTEND_URL:-http://localhost:5173}
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:     { condition: service_healthy }
+      redis:  { condition: service_healthy }
+      ollama: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── Worker BullMQ (même image, commande différente) ───────────
+  worker:
+    build: .
+    command: node src/workers/ingestionWorker.js
+    restart: unless-stopped
+    environment:
+      <<: *api-env
+      WORKER_CONCURRENCY:   ${WORKER_CONCURRENCY:-3}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-20}
+      UPLOAD_DIR:           /app/uploads
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:     { condition: service_healthy }
+      redis:  { condition: service_healthy }
+      ollama: { condition: service_healthy }
+
+volumes:
+  pgdata:
+  redisdata:
+  ollamadata:
+  uploads:
