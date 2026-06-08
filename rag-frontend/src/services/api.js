@@ -145,8 +145,7 @@ export const statsApi = {
 }
 
 // ── Auth helper (dev) ────────────────────────────────────────────
-const DEV_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJ0ZW5hbnRJZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMSIsImVtYWlsIjoidGVzdEBleGFtcGxlLmNvbSIsInJvbGVzIjpbImFkbWluIl0sImlhdCI6MTc4MDc5OTkzMCwiZXhwIjoxNzgxNDA0NzMwfQ.z5qJxR-GORHCPSJ8_DT1FcR53Kh4O4U7aO6cR08y5JI'
-
+const DEV_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJ0ZW5hbnRJZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMSIsImVtYWlsIjoidGVzdEBleGFtcGxlLmNvbSIsInJvbGVzIjpbImFkbWluIl0sImlhdCI6MTc4MDkyNDA5MiwiZXhwIjoxNzgxNTI4ODkyfQ.qia9bYTuTVRwaCQ4YGZEfLXZHbHd0LbBjTZd-OALIiw'
 export function setToken(token) {
   localStorage.setItem('rag_token', token)
 }
