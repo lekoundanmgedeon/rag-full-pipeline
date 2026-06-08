@@ -10,7 +10,7 @@ export const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379'
 redis.on('error', (err) => console.error('Redis error:', err.message))
 
 export const QUEUES = {
-  EMBEDDING: 'rag:embedding',
+  EMBEDDING: 'rag-embedding',
 }
 
 export const JOB_OPTIONS = {
