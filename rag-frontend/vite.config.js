@@ -13,7 +13,7 @@ export default defineConfig({
       '/api/upload':            { target: 'http://localhost:3000', changeOrigin: true },
       '/api/documents':         { target: 'http://localhost:3000', changeOrigin: true },
       '/api': {
-        target: 'http://localhost:3001',
+        target: 'http://localhost:3000',
         changeOrigin: true,
       }
     }

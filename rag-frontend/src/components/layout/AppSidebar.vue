@@ -23,6 +23,9 @@
         </svg>
         Ajouter des documents
       </button>
+      <button class="btn-logout" @click="logoutUser" type="button">
+        Déconnexion
+      </button>
 
       <!-- Queue uploads en cours -->
       <TransitionGroup name="upload-item" tag="div" class="upload-queue">
@@ -67,13 +70,24 @@
 
 <script setup>
 import { ref, computed }       from 'vue'
+import { useRouter }           from 'vue-router'
 import { useChatStore }        from '../../stores/chatStore.js'
+import { logout }              from '../../services/api.js'
 import ConversationItem        from './ConversationItem.vue'
 import UploadQueueItem         from '../upload/UploadQueueItem.vue'
 import UploadModal             from '../upload/UploadModal.vue'
 
 const store      = useChatStore()
+const router     = useRouter()
 const showUpload = ref(false)
+
+function logoutUser() {
+  logout()
+  store.conversations = []
+  store.messages = []
+  store.currentConvId = null
+  router.push('/login')
+}
 
 const activeUploads = computed(() =>
   store.uploadQueue.filter(u => u.status !== 'done')
@@ -143,7 +157,8 @@ const activeUploads = computed(() =>
   border-bottom: 1px solid var(--border);
 }
 
-.btn-upload {
+.btn-upload,
+.btn-logout {
   width: 100%;
   display: flex;
   align-items: center;
@@ -159,7 +174,9 @@ const activeUploads = computed(() =>
   transition: all 0.15s;
   text-align: left;
 }
-.btn-upload:hover {
+
+.btn-upload:hover,
+.btn-logout:hover {
   border-color: var(--accent-dim);
   color: var(--accent);
   background: var(--accent-glow);

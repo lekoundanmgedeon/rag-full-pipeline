@@ -145,9 +145,27 @@ export const statsApi = {
 }
 
 // ── Auth helper (dev) ────────────────────────────────────────────
+const DEV_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJ0ZW5hbnRJZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMSIsImVtYWlsIjoidGVzdEBleGFtcGxlLmNvbSIsInJvbGVzIjpbImFkbWluIl0sImlhdCI6MTc4MDc5OTkzMCwiZXhwIjoxNzgxNDA0NzMwfQ.z5qJxR-GORHCPSJ8_DT1FcR53Kh4O4U7aO6cR08y5JI'
+
 export function setToken(token) {
   localStorage.setItem('rag_token', token)
 }
 export function getToken() {
   return localStorage.getItem('rag_token')
+}
+export function logout() {
+  localStorage.removeItem('rag_token')
+}
+export function loginDev({ email, password, token }) {
+  const validCredentials = email === 'test@example.com' && password === 'password'
+  if (validCredentials || token === DEV_TOKEN) {
+    setToken(token || DEV_TOKEN)
+    return true
+  }
+  return false
+}
+export const AUTH_DEFAULTS = {
+  email: 'test@example.com',
+  password: 'password',
+  token: DEV_TOKEN,
 }

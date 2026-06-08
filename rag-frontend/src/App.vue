@@ -1,6 +1,6 @@
 <template>
   <div class="app-shell">
-    <AppSidebar />
+    <AppSidebar v-if="!isLogin" />
     <main class="app-main">
       <router-view />
     </main>
@@ -10,10 +10,26 @@
 <script setup>
 import AppSidebar from './components/layout/AppSidebar.vue'
 import { useChatStore } from './stores/chatStore.js'
-import { onMounted } from 'vue'
+import { onMounted, watch, computed } from 'vue'
+import { useRoute } from 'vue-router'
+import { getToken } from './services/api.js'
 
 const store = useChatStore()
-onMounted(() => store.loadConversations())
+const route = useRoute()
+const isLogin = computed(() => route.path === '/login')
+const isAuthenticated = computed(() => Boolean(getToken()))
+
+onMounted(() => {
+  if (!isLogin.value && isAuthenticated.value) {
+    store.loadConversations()
+  }
+})
+
+watch([isLogin, isAuthenticated], ([login, auth]) => {
+  if (!login && auth) {
+    store.loadConversations()
+  }
+})
 </script>
 
 <style>
