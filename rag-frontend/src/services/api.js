@@ -28,6 +28,8 @@ export async function sendChatMessage({ question, conversationId, filters = {} }
     method:  'POST',
     headers: {
       'Content-Type':  'application/json',
+      'Accept':        'text/event-stream',
+      'Cache-Control': 'no-cache',
       'Authorization': `Bearer ${token}`,
     },
     body: JSON.stringify({ question, conversationId, filters }),
@@ -38,12 +40,60 @@ export async function sendChatMessage({ question, conversationId, filters = {} }
     throw new Error(err.error || `HTTP ${response.status}`)
   }
 
+  if (!response.body) {
+    const text = await response.text()
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(text))
+        controller.close()
+      },
+    })
+  }
+
   return response.body
+}
+
+function* _yieldFallbackPayload(payload) {
+  if (!payload) return
+  if (typeof payload === 'string') {
+    yield { type: 'token', content: payload }
+    yield { type: 'done' }
+    return
+  }
+
+  if (payload.type) {
+    yield payload
+    return
+  }
+
+  if (payload.content != null) {
+    yield { type: 'token', content: String(payload.content) }
+    yield {
+      type: 'done',
+      latencyMs: payload.latencyMs,
+      sources: payload.sources,
+      conversationId: payload.conversationId,
+      refinedQuestion: payload.refinedQuestion,
+    }
+    return
+  }
+
+  if (payload.message != null) {
+    yield { type: 'token', content: String(payload.message) }
+    yield { type: 'done' }
+    return
+  }
+
+  if (Array.isArray(payload)) {
+    for (const item of payload) {
+      yield* _yieldFallbackPayload(item)
+    }
+  }
 }
 
 /**
  * Parse un ReadableStream SSE et yield des événements typés.
- * Gère les chunks partiels et le buffer de lignes.
+ * Gère les chunks partiels, les retours Windows et un fallback JSON.
  */
 export async function* parseSSEStream(readableStream) {
   const reader  = readableStream.getReader()
@@ -56,7 +106,7 @@ export async function* parseSSEStream(readableStream) {
       if (done) break
 
       buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
+      const lines = buffer.split(/\r?\n/)
       buffer = lines.pop() ?? ''  // garder le fragment incomplet
 
       for (const line of lines) {
@@ -66,6 +116,21 @@ export async function* parseSSEStream(readableStream) {
         try {
           yield JSON.parse(data)
         } catch { /* ligne JSON incomplète */ }
+      }
+    }
+
+    if (buffer.trim()) {
+      const payload = buffer.trim()
+      if (payload.startsWith('data: ')) {
+        const data = payload.slice(6).trim()
+        if (data && data !== '[DONE]') {
+          try { yield JSON.parse(data) } catch {}
+        }
+      } else {
+        try {
+          const json = JSON.parse(payload)
+          yield* _yieldFallbackPayload(json)
+        } catch {}
       }
     }
   } finally {

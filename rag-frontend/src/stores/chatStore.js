@@ -10,7 +10,7 @@
  */
 
 import { defineStore }       from 'pinia'
-import { ref, computed }     from 'vue'
+import { ref, computed, reactive } from 'vue'
 import { useRouter }         from 'vue-router'
 import {
   sendChatMessage, parseSSEStream,
@@ -70,10 +70,12 @@ export const useChatStore = defineStore('chat', () => {
     isLoadingMessages.value = true
     try {
       const { data } = await conversationsApi.get(id)
-      messages.value = data.messages.map(m => ({
+      messages.value = data.messages.map(m => reactive({
         ...m,
         sources:  m.sources  || [],
         feedback: m.feedback || null,
+        streaming: false,
+        isError: false,
       }))
       router.push(`/c/${id}`)
     } catch {
@@ -112,15 +114,16 @@ export const useChatStore = defineStore('chat', () => {
     })
 
     // 2. Préparer le message assistant (streaming)
-    const assistantMsg = {
+    const assistantMsg = reactive({
       id:        `tmp-assistant-${Date.now()}`,
       role:      'assistant',
       content:   '',
       sources:   [],
       feedback:  null,
       streaming: true,
+      isError:   false,
       created_at: new Date().toISOString(),
-    }
+    })
     messages.value.push(assistantMsg)
 
     isStreaming.value = true
