@@ -29,92 +29,102 @@ export class SearchRepository {
    * @param {number}   params.vecWeight     - poids vectoriel (défaut 0.7)
    * @param {number}   params.textWeight    - poids full-text (défaut 0.3)
    */
-  async hybridSearch({
-    embedding,
-    queryText,
-    tenantId,
-    topK          = 10,
-    candidatePool = 60,
-    filters       = {},
-    vecWeight     = 0.7,
-    textWeight    = 0.3,
-  }) {
-    // Construire les conditions de filtre dynamiques
-    const { conditions, values, nextIdx } = this._buildFilters(tenantId, filters, 4);
+async hybridSearch({
+  embedding,
+  queryText,
+  tenantId,
+  topK          = 10,
+  candidatePool = 60,
+  filters       = {},
+  vecWeight     = 0.7,
+  textWeight    = 0.3,
+}) {
+  const embStr         = '[' + embedding.join(',') + ']'
+  const normalizedQ    = this._normalizeForTsQuery(queryText)
+  const hasDocFilter   = filters.documentIds?.length > 0
 
-    // Normaliser le texte pour to_tsquery (supprimer les caractères spéciaux)
-    const normalizedQuery = this._normalizeForTsQuery(queryText);
+  // Construction dynamique selon qu'on a un filtre documentIds ou non
+  let sql, params
 
-    const sql = `
-      WITH
-      -- ── Recherche vectorielle (cosine similarity) ──────────────
-      vector_search AS (
-        SELECT
-          dc.id,
-          1 - (dc.embedding <=> $1::vector)    AS vec_score
-        FROM document_chunks dc
-        WHERE dc.tenant_id = $2
-          AND dc.embedding IS NOT NULL
-          ${filters.documentIds?.length ? `AND dc.document_id = ANY($3::uuid[])` : ''}
-        ORDER BY dc.embedding <=> $1::vector
+  if (hasDocFilter) {
+    sql = `
+      WITH vector_search AS (
+        SELECT id, 1 - (embedding <=> $1::vector) AS vec_score
+        FROM document_chunks
+        WHERE tenant_id = $2
+          AND embedding IS NOT NULL
+          AND document_id = ANY($3::uuid[])
+        ORDER BY embedding <=> $1::vector
         LIMIT ${candidatePool}
       ),
-
-      -- ── Recherche full-text (ts_rank_cd ≈ BM25) ───────────────
       text_search AS (
-        SELECT
-          dc.id,
-          ts_rank_cd(dc.content_tsv, query, 32) AS text_score
-        FROM
-          document_chunks dc,
-          to_tsquery('french', $3) AS query
-        WHERE dc.tenant_id = $2
-          AND dc.content_tsv @@ query
-          ${filters.documentIds?.length ? `AND dc.document_id = ANY($4::uuid[])` : ''}
+        SELECT id, ts_rank_cd(content_tsv, query, 32) AS text_score
+        FROM document_chunks, to_tsquery('french', $4) query
+        WHERE tenant_id = $2
+          AND content_tsv @@ query
+          AND document_id = ANY($3::uuid[])
+        LIMIT ${candidatePool}
+      )
+      SELECT
+        dc.id, dc.document_id, dc.chunk_index,
+        dc.content, dc.token_count, dc.metadata,
+        d.title AS doc_title, d.file_type AS doc_file_type,
+        COALESCE(vs.vec_score, 0) * ${vecWeight}
+          + COALESCE(ts.text_score, 0) * ${textWeight} AS hybrid_score
+      FROM document_chunks dc
+      JOIN documents d ON d.id = dc.document_id
+      LEFT JOIN vector_search vs ON vs.id = dc.id
+      LEFT JOIN text_search   ts ON ts.id = dc.id
+      WHERE (vs.id IS NOT NULL OR ts.id IS NOT NULL)
+        AND dc.tenant_id = $2
+        AND d.status = 'indexed'
+        AND hybrid_score > 0.05
+      ORDER BY hybrid_score DESC
+      LIMIT $5
+    `
+    params = [embStr, tenantId, filters.documentIds, normalizedQ || 'document', topK]
+
+  } else {
+    sql = `
+      WITH vector_search AS (
+        SELECT id, 1 - (embedding <=> $1::vector) AS vec_score
+        FROM document_chunks
+        WHERE tenant_id = $2
+          AND embedding IS NOT NULL
+        ORDER BY embedding <=> $1::vector
         LIMIT ${candidatePool}
       ),
-
-      -- ── Fusion + score hybride ─────────────────────────────────
-      fused AS (
-        SELECT
-          dc.id,
-          dc.document_id,
-          dc.chunk_index,
-          dc.content,
-          dc.token_count,
-          dc.metadata,
-          d.title         AS doc_title,
-          d.file_type     AS doc_file_type,
-          d.file_name     AS doc_file_name,
-          COALESCE(vs.vec_score,  0) AS vec_score,
-          COALESCE(ts.text_score, 0) AS text_score,
-          COALESCE(vs.vec_score,  0) * ${vecWeight}
-            + COALESCE(ts.text_score, 0) * ${textWeight} AS hybrid_score
-        FROM document_chunks dc
-        JOIN documents d ON d.id = dc.document_id
-        LEFT JOIN vector_search vs ON vs.id = dc.id
-        LEFT JOIN text_search   ts ON ts.id = dc.id
-        WHERE (vs.id IS NOT NULL OR ts.id IS NOT NULL)
-          AND dc.tenant_id = $2
-          AND d.status = 'indexed'
-          ${conditions.join(' ')}
+      text_search AS (
+        SELECT id, ts_rank_cd(content_tsv, query, 32) AS text_score
+        FROM document_chunks, to_tsquery('french', $3) query
+        WHERE tenant_id = $2
+          AND content_tsv @@ query
+        LIMIT ${candidatePool}
       )
-
-      SELECT * FROM fused
-      WHERE hybrid_score > 0.05
+      SELECT
+        dc.id, dc.document_id, dc.chunk_index,
+        dc.content, dc.token_count, dc.metadata,
+        d.title AS doc_title, d.file_type AS doc_file_type,
+        COALESCE(vs.vec_score, 0) * ${vecWeight}
+          + COALESCE(ts.text_score, 0) * ${textWeight} AS hybrid_score
+      FROM document_chunks dc
+      JOIN documents d ON d.id = dc.document_id
+      LEFT JOIN vector_search vs ON vs.id = dc.id
+      LEFT JOIN text_search   ts ON ts.id = dc.id
+      WHERE (vs.id IS NOT NULL OR ts.id IS NOT NULL)
+        AND dc.tenant_id = $2
+        AND d.status = 'indexed'
       ORDER BY hybrid_score DESC
-      LIMIT ${ nextIdx }
-    `;
-
-    // Construire les paramètres selon les filtres actifs
-    const params = this._buildParams({ embedding, tenantId, queryText: normalizedQuery, filters, topK, nextIdx });
-
-    const startMs = Date.now();
-    const { rows } = await this.db.query(sql, params);
-    logger.debug(`Hybrid search: ${rows.length} results in ${Date.now() - startMs}ms`);
-
-    return rows;
+      LIMIT $4
+    `
+    params = [embStr, tenantId, normalizedQ || 'document', topK]
   }
+
+  const startMs = Date.now()
+  const { rows } = await this.db.query(sql, params)
+  logger.debug(`Hybrid search: ${rows.length} results in ${Date.now() - startMs}ms`)
+  return rows
+}
 
   // ── Recherche vectorielle pure (fallback) ─────────────────────
   async vectorSearch({ embedding, tenantId, topK = 20, filters = {} }) {

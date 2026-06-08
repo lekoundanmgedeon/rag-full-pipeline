@@ -11,7 +11,7 @@ const http = axios.create({
 
 // Injecter le JWT automatiquement
 http.interceptors.request.use(cfg => {
-  const token = localStorage.getItem('rag_token')
+  const token = localStorage.getItem('rag_token')  // ← doit lire à chaque requête
   if (token) cfg.headers.Authorization = `Bearer ${token}`
   return cfg
 })
