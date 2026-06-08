@@ -145,7 +145,7 @@ export const statsApi = {
 }
 
 // ── Auth helper (dev) ────────────────────────────────────────────
-const DEV_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJ0ZW5hbnRJZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMSIsImVtYWlsIjoidGVzdEBleGFtcGxlLmNvbSIsInJvbGVzIjpbImFkbWluIl0sImlhdCI6MTc4MDkyNDA5MiwiZXhwIjoxNzgxNTI4ODkyfQ.qia9bYTuTVRwaCQ4YGZEfLXZHbHd0LbBjTZd-OALIiw'
+const DEV_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJ0ZW5hbnRJZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMSIsImVtYWlsIjoidGVzdEBleGFtcGxlLmNvbSIsInJvbGVzIjpbImFkbWluIl0sImlhdCI6MTc4MDkzNzQwOSwiZXhwIjoxNzgxNTQyMjA5fQ.LJM0NKIk1dDwnuFpuxWqYS8FEgNQaSbCEjUfd4Vcb9w'
 export function setToken(token) {
   localStorage.setItem('rag_token', token)
 }
