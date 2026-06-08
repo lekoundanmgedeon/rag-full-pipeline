@@ -105,8 +105,10 @@ async function start() {
     process.exit(1)
   }
 
-  try {
-    await redis.connect()
+ try {
+    if (redis.status === 'wait' || redis.status === 'close') {
+      await redis.connect()
+    }
     logger.info('Redis connected')
   } catch (err) {
     logger.warn('Redis unavailable (cache + queue disabled)', { error: err.message })
@@ -124,7 +126,10 @@ async function start() {
   app.listen(PORT, () => {
     logger.info(`🚀 RAG API (unified) on http://localhost:${PORT}`)
     logger.info(`   Embed : ${process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text'}`)
-    logger.info(`   LLM   : ${process.env.OLLAMA_LLM_MODEL  || 'qwen3:8b'}`)
+   const llmModel = process.env.LLM_PROVIDER === 'mistral'
+      ? process.env.MISTRAL_MODEL
+      : process.env.OLLAMA_LLM_MODEL
+    logger.info(`   LLM   : ${llmModel} (${process.env.LLM_PROVIDER || 'ollama'})`)
   })
 }
 

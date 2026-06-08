@@ -14,169 +14,220 @@
  *   mistral:7b — très rapide, contexte 32k
  */
 
-import axios from 'axios';
-import { logger } from '../utils/logger.js';
-import 'dotenv/config';
+/**
+ * LLMService — supporte Ollama local ET Mistral API
+ * Sélection via LLM_PROVIDER=ollama|mistral dans .env
+ */
 
-const OLLAMA_BASE  = process.env.OLLAMA_BASE_URL  || 'http://localhost:11434';
-const DEFAULT_MODEL = process.env.OLLAMA_LLM_MODEL || 'qwen3:8b';
-const MAX_RETRIES  = parseInt(process.env.MAX_RETRIES || '3');
+import axios from 'axios'
+import { logger } from '../utils/logger.js'
+import 'dotenv/config'
+
+const PROVIDER = process.env.LLM_PROVIDER || 'ollama'
+
+// ── Config Ollama ─────────────────────────────────────────────
+const OLLAMA_BASE  = process.env.OLLAMA_BASE_URL  || 'http://localhost:11434'
+const OLLAMA_MODEL = process.env.OLLAMA_LLM_MODEL || 'gemma3:1b'
+
+// ── Config Mistral ────────────────────────────────────────────
+const MISTRAL_BASE  = 'https://api.mistral.ai/v1'
+const MISTRAL_MODEL = process.env.MISTRAL_MODEL || 'mistral-small-latest'
+const MISTRAL_KEY   = process.env.MISTRAL_API_KEY
+
+const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || '3')
 
 export class OllamaLLMService {
   constructor() {
-    this.model   = DEFAULT_MODEL;
-    this.baseUrl = OLLAMA_BASE;
+    this.provider = PROVIDER
+    this.model    = PROVIDER === 'mistral' ? MISTRAL_MODEL : OLLAMA_MODEL
+
     this._client = axios.create({
-      baseURL: this.baseUrl,
-      timeout: 120_000,
-    });
+      baseURL: PROVIDER === 'mistral' ? MISTRAL_BASE : OLLAMA_BASE,
+      timeout: PROVIDER === 'mistral' ? 30_000 : 600_000,
+      headers: PROVIDER === 'mistral'
+        ? { Authorization: `Bearer ${MISTRAL_KEY}` }
+        : {},
+    })
   }
 
-  // ── Génération complète (non-streaming) ──────────────────────
-  /**
-   * Pour les appels internes : reformulation, résumé, classification.
-   * Retourne le texte complet de la réponse.
-   */
+  // ── Génération complète (reformulation, résumé) ──────────────
   async complete(prompt, opts = {}) {
-    const payload = {
-      model:  opts.model || this.model,
-      prompt: typeof prompt === 'string' ? prompt : undefined,
-      messages: Array.isArray(prompt) ? prompt : undefined,
-      stream:  false,
-      options: {
-        temperature:   opts.temperature   ?? 0.1,
-        num_predict:   opts.maxTokens     ?? 512,
-        top_p:         opts.topP          ?? 0.9,
-        repeat_penalty: opts.repeatPenalty ?? 1.1,
-        // Qwen3 : désactiver le "thinking" pour les appels internes rapides
-        ...(this.model.startsWith('qwen3') ? { think: false } : {}),
-      },
-    };
+    if (this.provider === 'mistral') {
+      return this._mistralComplete(prompt, opts)
+    }
+    return this._ollamaComplete(prompt, opts)
+  }
 
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const endpoint = Array.isArray(prompt) ? '/api/chat' : '/api/generate';
-        const response = await this._client.post(endpoint, payload);
+  // ── Streaming ────────────────────────────────────────────────
+  async *stream(promptObj, opts = {}) {
+    if (this.provider === 'mistral') {
+      yield* this._mistralStream(promptObj, opts)
+    } else {
+      yield* this._ollamaStream(promptObj, opts)
+    }
+  }
 
-        // /api/generate → response.response
-        // /api/chat     → response.message.content
-        return response.data?.response
-          ?? response.data?.message?.content
-          ?? '';
-      } catch (err) {
-        if (attempt === MAX_RETRIES) throw err;
-        const delay = Math.pow(2, attempt) * 500;
-        logger.warn(`LLM complete retry ${attempt + 1} in ${delay}ms`, { error: err.message });
-        await this._sleep(delay);
+  // ── Mistral : génération complète ────────────────────────────
+  async _mistralComplete(prompt, opts = {}) {
+    const messages = typeof prompt === 'string'
+      ? [{ role: 'user', content: prompt }]
+      : prompt
+
+    const { data } = await this._client.post('/chat/completions', {
+      model:       this.model,
+      messages,
+      temperature: opts.temperature ?? 0.1,
+      max_tokens:  opts.maxTokens   ?? 512,
+      stream:      false,
+    })
+
+    return data.choices[0].message.content
+  }
+
+  // ── Mistral : streaming ──────────────────────────────────────
+  async *_mistralStream(promptObj, opts = {}) {
+    const { system, messages } = promptObj
+
+    const allMessages = [
+      ...(system ? [{ role: 'system', content: system }] : []),
+      ...messages,
+    ]
+
+    const response = await this._client.post('/chat/completions', {
+      model:       this.model,
+      messages:    allMessages,
+      temperature: opts.temperature ?? 0.2,
+      max_tokens:  opts.maxTokens   ?? 1024,
+      stream:      true,
+    }, {
+      responseType: 'stream',
+    })
+
+    let buffer = ''
+
+    for await (const chunk of response.data) {
+      buffer += chunk.toString()
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        const data = line.slice(6).trim()
+        if (data === '[DONE]') return
+        try {
+          const parsed = JSON.parse(data)
+          const token  = parsed.choices?.[0]?.delta?.content
+          if (token) yield token
+        } catch {}
       }
     }
   }
 
-  // ── Génération streaming ──────────────────────────────────────
-  /**
-   * Retourne un AsyncGenerator qui yield les tokens au fur et à mesure.
-   * Utilisé pour le SSE vers le frontend.
-   *
-   * @param {object} promptObj - { system, messages }
-   * @param {object} opts      - { temperature, maxTokens, ... }
-   * @yields {string} token de texte
-   */
-  async *stream(promptObj, opts = {}) {
-    const { system, messages } = promptObj;
+  // ── Ollama : génération complète ─────────────────────────────
+  async _ollamaComplete(prompt, opts = {}) {
+    const payload = {
+      model:   OLLAMA_MODEL,
+      stream:  false,
+      options: {
+        temperature:   opts.temperature ?? 0.1,
+        num_predict:   opts.maxTokens   ?? 512,
+      },
+    }
 
-    // Construire le tableau de messages pour /api/chat
+    if (Array.isArray(prompt)) {
+      payload.messages = prompt
+    } else {
+      payload.prompt = prompt
+    }
+
+    const endpoint = Array.isArray(prompt) ? '/api/chat' : '/api/generate'
+    const { data } = await this._client.post(endpoint, payload)
+    return data?.response ?? data?.message?.content ?? ''
+  }
+
+  // ── Ollama : streaming ───────────────────────────────────────
+  async *_ollamaStream(promptObj, opts = {}) {
+    const { system, messages } = promptObj
+
     const chatMessages = [
       ...(system ? [{ role: 'system', content: system }] : []),
       ...messages,
-    ];
+    ]
 
-    const payload = {
-      model:    opts.model || this.model,
+    const response = await this._client.post('/api/chat', {
+      model:    OLLAMA_MODEL,
       messages: chatMessages,
       stream:   true,
       options: {
-        temperature:    opts.temperature    ?? 0.2,
-        num_predict:    opts.maxTokens      ?? 1024,
-        num_ctx:        opts.contextWindow  ?? 8192,
-        top_p:          opts.topP           ?? 0.9,
-        repeat_penalty: opts.repeatPenalty  ?? 1.1,
-        // Qwen3 : mode thinking (raisonnement) activé pour les réponses finales
-        ...(this.model.startsWith('qwen3') ? { think: opts.think ?? false } : {}),
+        temperature:    opts.temperature   ?? 0.2,
+        num_predict:    opts.maxTokens     ?? 200,
+        num_ctx:        opts.contextWindow ?? 512,
+        num_thread:     4,
+        repeat_penalty: 1.1,
       },
-    };
-
-    const response = await this._client.post('/api/chat', payload, {
+    }, {
       responseType: 'stream',
-      timeout: 120_000,
-    });
+    })
 
-    let buffer = '';
-
+    let buffer = ''
     for await (const chunk of response.data) {
-      buffer += chunk.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? ''; // garder le dernier fragment incomplet
-
+      buffer += chunk.toString()
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
       for (const line of lines) {
-        if (!line.trim()) continue;
+        if (!line.trim()) continue
         try {
-          const data = JSON.parse(line);
-
-          // Qwen3 thinking : ignorer les blocs <think>...</think>
-          if (data.message?.content) {
-            const token = this._filterThinking(data.message.content);
-            if (token) yield token;
-          }
-
-          if (data.done) return;
-
-        } catch {
-          // Ligne JSON incomplète — ignorée
-        }
+          const data = JSON.parse(line)
+          const token = this._filterThinking(data.message?.content || '')
+          if (token) yield token
+          if (data.done) return
+        } catch {}
       }
-    }
-
-    // Vider le buffer restant
-    if (buffer.trim()) {
-      try {
-        const data = JSON.parse(buffer);
-        if (data.message?.content) {
-          const token = this._filterThinking(data.message.content);
-          if (token) yield token;
-        }
-      } catch {}
     }
   }
 
-  // ── Filtre Qwen3 thinking tags ────────────────────────────────
-  // Qwen3 peut émettre des balises <think>...</think> dans ses tokens.
-  // On les filtre pour n'envoyer que la réponse finale au frontend.
   _filterThinking(token) {
-    // Supprimer les blocs <think> complets
-    token = token.replace(/<think>[\s\S]*?<\/think>/g, '');
-    // Supprimer les ouvertures/fermetures partielles
-    token = token.replace(/<\/?think>/g, '');
-    return token;
+    return token.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<\/?think>/g, '')
   }
 
   // ── Health check ─────────────────────────────────────────────
   async healthCheck() {
+    if (this.provider === 'mistral') {
     try {
-      const { data } = await this._client.get('/api/tags');
-      const models   = data.models?.map(m => m.name) || [];
-      const hasModel = models.some(m => m.startsWith(this.model.split(':')[0]));
+      if (!MISTRAL_KEY) {
+        return { ok: false, message: 'MISTRAL_API_KEY manquante dans .env' }
+      }
+      // Test réel : appel léger sur /models
+      const { data } = await this._client.get('/models')
+      const models = data.data?.map(m => m.id) || []
+      const hasModel = models.includes(this.model)
       return {
-        ok:      hasModel,
-        models,
-        target:  this.model,
+        ok: true,
+        target: this.model,
         message: hasModel
-          ? `Model ${this.model} available`
-          : `Model ${this.model} NOT found. Run: ollama pull ${this.model}`,
-      };
+          ? `Mistral API ready: ${this.model}`
+          : `Mistral API ok mais modèle ${this.model} introuvable. Disponibles: ${models.slice(0,3).join(', ')}`,
+      }
     } catch (err) {
-      return { ok: false, message: `Ollama unreachable: ${err.message}` };
+      return {
+        ok: false,
+        message: `Mistral API error: ${err.response?.data?.message || err.response?.status || err.message}`,
+      }
     }
   }
-
-  _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+     // Ollama
+    try {
+      const { data } = await this._client.get('/api/tags')
+      const models   = data.models?.map(m => m.name) || []
+      const ok       = models.some(m => m.startsWith(OLLAMA_MODEL.split(':')[0]))
+      return {
+        ok,
+        models,
+        target:  OLLAMA_MODEL,
+        message: ok ? `Ollama ready: ${OLLAMA_MODEL}` : `Model not found: ${OLLAMA_MODEL}`,
+      }
+    } catch (err) {
+      return { ok: false, message: `Ollama unreachable: ${err.message}` }
+    }
+  }
 }
